@@ -1,11 +1,13 @@
 # DRAWTIC.io
 
+A lightweight, multiplayer desktop game inspired by Skribbl.io. Built entirely with Python, this project uses raw TCP sockets for real-time networking and Tkinter for a clean, responsive graphical user interface.
+
+## Member
+
 Fawwaz Reynardio Ednansyah 5025241167<br>
 Naufal Bintang Brillian 5025241168<br>
 Rayen Yeriel Mangiwa 5025241262<br>
 Makna Alam Pratama 5025140177<br>
-
-A lightweight, multiplayer desktop game inspired by Skribbl.io. Built entirely with Python, this project uses raw TCP sockets for real-time networking and Tkinter for a clean, responsive graphical user interface.
 
 ## Features
 
