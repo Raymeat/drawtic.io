@@ -1,7 +1,3 @@
-"""
-Skribbl-Clone Client
-Tkinter GUI with: login/register, drawing canvas, chat/guess, leaderboard
-"""
 
 import socket
 import threading
@@ -12,9 +8,6 @@ import time
 import struct
 
 
-# ─────────────────────────────────────────────
-# Framed JSON transport (mirrors server)
-# ─────────────────────────────────────────────
 def send_msg(sock: socket.socket, data: dict) -> bool:
     try:
         payload = json.dumps(data).encode('utf-8')
@@ -50,10 +43,6 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes | None:
         buf += chunk
     return buf
 
-
-# ─────────────────────────────────────────────
-# Colour / palette constants
-# ─────────────────────────────────────────────
 BG_DARK    = "#1e1e2e"
 BG_MID     = "#2a2a3e"
 BG_CARD    = "#313147"
@@ -68,10 +57,6 @@ FONT_HEAD  = ("Segoe UI", 14, "bold")
 FONT_BODY  = ("Segoe UI", 11)
 FONT_MONO  = ("Consolas", 11)
 
-
-# ─────────────────────────────────────────────
-# Helper widgets
-# ─────────────────────────────────────────────
 def styled_btn(parent, text, cmd, bg=ACCENT, fg=TEXT_MAIN, font=FONT_BODY, **kw):
     b = tk.Button(parent, text=text, command=cmd, bg=bg, fg=fg,
                   font=font, relief="flat", cursor="hand2",
@@ -90,10 +75,6 @@ def label(parent, text, font=FONT_BODY, fg=TEXT_MAIN, **kw):
     return tk.Label(parent, text=text, bg=parent.cget("bg"), fg=fg,
                     font=font, **kw)
 
-
-# ─────────────────────────────────────────────
-# Login / Register Screen
-# ─────────────────────────────────────────────
 class AuthScreen(tk.Frame):
     def __init__(self, master, on_auth):
         super().__init__(master, bg=BG_DARK)
@@ -175,10 +156,6 @@ class AuthScreen(tk.Frame):
         sock.close()
         self.status.config(text=resp.get("message","Register failed") if resp else "No response")
 
-
-# ─────────────────────────────────────────────
-# Drawing Canvas
-# ─────────────────────────────────────────────
 class DrawCanvas(tk.Frame):
     W, H = 680, 480
 
@@ -296,10 +273,6 @@ class DrawCanvas(tk.Frame):
     def clear(self):
         self.canvas.delete("all")
 
-
-# ─────────────────────────────────────────────
-# Chat / Guess Panel
-# ─────────────────────────────────────────────
 class ChatPanel(tk.Frame):
     def __init__(self, parent, on_send):
         super().__init__(parent, bg=BG_CARD)
@@ -363,9 +336,6 @@ class ChatPanel(tk.Frame):
         self.log.config(state="disabled")
 
 
-# ─────────────────────────────────────────────
-# Player / Score Sidebar
-# ─────────────────────────────────────────────
 class PlayerPanel(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=BG_CARD, width=180)
@@ -400,9 +370,6 @@ class PlayerPanel(tk.Frame):
                      font=FONT_BODY, anchor="w").pack(fill="x", pady=1)
 
 
-# ─────────────────────────────────────────────
-# Top Info Bar
-# ─────────────────────────────────────────────
 class InfoBar(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=BG_MID, height=50)
@@ -453,9 +420,6 @@ class InfoBar(tk.Frame):
         self.timer_lbl.config(text="⏱ —", fg=TEXT_DIM)
 
 
-# ─────────────────────────────────────────────
-# Word-choice overlay
-# ─────────────────────────────────────────────
 class WordChoiceDialog(tk.Toplevel):
     def __init__(self, parent, choices: list[str], on_choice, seconds=15):
         super().__init__(parent)
@@ -501,9 +465,6 @@ class WordChoiceDialog(tk.Toplevel):
         self.geometry(f"+{(sw-300)//2}+{(sh-250)//2}")
 
 
-# ─────────────────────────────────────────────
-# Results / Game-over overlay
-# ─────────────────────────────────────────────
 def show_results(parent, title: str, rankings: list[dict], all_time: list[dict] | None = None):
     win = tk.Toplevel(parent)
     win.title(title)
@@ -531,9 +492,6 @@ def show_results(parent, title: str, rankings: list[dict], all_time: list[dict] 
     win.geometry(f"+{(sw-400)//2}+{(sh-500)//2}")
 
 
-# ─────────────────────────────────────────────
-# Main Game Screen
-# ─────────────────────────────────────────────
 class GameScreen(tk.Frame):
     def __init__(self, master, sock: socket.socket, username: str):
         super().__init__(master, bg=BG_DARK)
@@ -590,8 +548,7 @@ class GameScreen(tk.Frame):
         send_msg(self.sock, {"action":"clear_canvas"})
 
     def _on_chat_send(self, text: str):
-        # Do NOT echo locally — the server broadcasts the message back to everyone
-        # including the sender, so _handle("chat") will display it once for all clients
+
         send_msg(self.sock, {"action":"chat","text":text})
 
     def _start_game(self):
@@ -714,9 +671,6 @@ class GameScreen(tk.Frame):
             show_results(self, "🌍 All-Time Leaderboard", data)
 
 
-# ─────────────────────────────────────────────
-# Application root
-# ─────────────────────────────────────────────
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
