@@ -1,8 +1,3 @@
-"""
-Skribbl-Clone Server
-Handles: user management, TCP sockets, game logic, leaderboard, broadcasting
-"""
-
 import socket
 import threading
 import json
@@ -18,9 +13,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────
 # Word Bank
-# ─────────────────────────────────────────────
 WORD_BANK = [
     "apple", "banana", "car", "dog", "elephant", "flower", "guitar",
     "house", "island", "jungle", "kite", "lion", "moon", "night",
@@ -44,9 +37,7 @@ WORD_BANK = [
 ]
 
 
-# ─────────────────────────────────────────────
 # Utility – framed JSON over TCP
-# ─────────────────────────────────────────────
 def send_msg(sock: socket.socket, data: dict) -> bool:
     """Send a length-prefixed JSON message."""
     try:
@@ -86,12 +77,10 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes | None:
     return buf
 
 
-# ─────────────────────────────────────────────
 # User Manager
-# ─────────────────────────────────────────────
 class UserManager:
     def __init__(self):
-        self._users: dict[str, str] = {}   # username -> hashed password
+        self._users: dict[str, str] = {}   
         self._lock = threading.Lock()
 
     def _hash(self, pw: str) -> str:
@@ -118,9 +107,7 @@ class UserManager:
             return True, "Login successful."
 
 
-# ─────────────────────────────────────────────
 # Leaderboard
-# ─────────────────────────────────────────────
 class Leaderboard:
     def __init__(self):
         self._scores: dict[str, int] = {}
@@ -158,32 +145,29 @@ class Leaderboard:
             return ranked[:10]
 
 
-# ─────────────────────────────────────────────
 # Game State
-# ─────────────────────────────────────────────
 class GameState:
     LOBBY   = "lobby"
     PLAYING = "playing"
     RESULTS = "results"
 
-    ROUND_DURATION = 80   # seconds per turn
+    ROUND_DURATION = 80 
     ROUNDS_PER_GAME = 3
     WORD_CHOICES = 3
 
     def __init__(self):
         self.status = self.LOBBY
-        self.players: list[str] = []          # ordered list
+        self.players: list[str] = []         
         self.current_drawer: str | None = None
         self.current_word: str | None = None
         self.current_word_hint: str | None = None
         self.round_number = 0
         self.turn_index = 0
         self.turn_start: float | None = None
-        self.guessed: set[str] = set()        # who guessed correctly this turn
+        self.guessed: set[str] = set()       
         self.word_choices: list[str] = []
         self._lock = threading.Lock()
 
-    # helpers
     def _make_hint(self, word: str) -> str:
         return ' '.join(['_' if c != ' ' else ' ' for c in word])
 
@@ -211,7 +195,6 @@ class GameState:
             self.guessed = set()
 
     def reveal_hint_letter(self):
-        """Progressively reveal one more letter of the hint."""
         with self._lock:
             if not self.current_word or not self.current_word_hint:
                 return
@@ -230,7 +213,6 @@ class GameState:
         return max(0, int(self.ROUND_DURATION - elapsed))
 
     def score_for_guess(self) -> int:
-        """Earlier correct guesses are worth more."""
         time_left = self.time_remaining()
         return max(50, 100 + int(time_left * 1.5))
 
@@ -238,7 +220,6 @@ class GameState:
         return guessers * 30
 
     def next_turn(self) -> bool:
-        """Advance to next player. Returns False if game is over."""
         with self._lock:
             self.turn_index += 1
             self.guessed = set()
@@ -255,9 +236,7 @@ class GameState:
             return True
 
 
-# ─────────────────────────────────────────────
 # Server
-# ─────────────────────────────────────────────
 class SkribblServer:
     MIN_PLAYERS = 2
     HOST = '0.0.0.0'
@@ -268,18 +247,15 @@ class SkribblServer:
         self.leaderboard = Leaderboard()
         self.game = GameState()
 
-        # connected clients: username -> socket
         self.clients: dict[str, socket.socket] = {}
         self.client_lock = threading.Lock()
 
-        # track who is authenticated
         self.authenticated: set[str] = set()
 
         self._server_sock: socket.socket | None = None
         self._turn_timer: threading.Timer | None = None
         self._hint_thread: threading.Thread | None = None
 
-    # ── networking ──
     def start(self):
         self._server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -314,7 +290,7 @@ class SkribblServer:
         if sock:
             send_msg(sock, data)
 
-    # ── client handler ──
+    # client handler
     def _handle_client(self, conn: socket.socket):
         username = None
         try:
@@ -324,7 +300,7 @@ class SkribblServer:
                     break
                 action = msg.get("action")
 
-                # ── Auth phase ──
+                # Auth phase
                 if action == "register":
                     ok, text = self.user_mgr.register(msg.get("username",""), msg.get("password",""))
                     send_msg(conn, {"action":"register_result","ok":ok,"message":text})
@@ -345,7 +321,7 @@ class SkribblServer:
                     else:
                         send_msg(conn, {"action":"login_result","ok":False,"message":text})
 
-                # ── Authenticated actions ──
+                # Authenticated actions
                 elif action == "chat":
                     if username:
                         self._handle_chat(username, msg.get("text",""))
@@ -394,7 +370,7 @@ class SkribblServer:
             self.clients.pop(username, None)
             self.authenticated.discard(username)
 
-    # ── Game flow ──
+    # Game flow
     def _on_player_joined(self, username: str):
         with self.client_lock:
             players = list(self.clients.keys())
@@ -432,20 +408,17 @@ class SkribblServer:
         choices = self.game.pick_word_choices()
         self.game.word_choices = choices
 
-        # Tell everyone who draws
         self.broadcast({
             "action":"new_turn",
             "drawer": drawer,
             "round": self.game.round_number,
             "total_rounds": GameState.ROUNDS_PER_GAME
         })
-        # Give word choices only to the drawer
         self.send_to(drawer, {
             "action":"choose_word",
             "choices": choices,
             "seconds": 15
         })
-        # Auto-pick after 15s if drawer doesn't choose
         t = threading.Timer(15.0, self._auto_pick_word)
         t.daemon = True
         t.start()
@@ -460,7 +433,6 @@ class SkribblServer:
         hint = self.game.current_word_hint
         word_len = len(word)
 
-        # Tell drawer the word
         self.send_to(self.game.current_drawer, {
             "action":"turn_started",
             "word": word,
@@ -481,7 +453,6 @@ class SkribblServer:
                     "is_drawer": False
                 })
 
-        # Start round timer
         if self._turn_timer:
             self._turn_timer.cancel()
         self._turn_timer = threading.Timer(GameState.ROUND_DURATION, self._on_turn_timeout)
@@ -500,7 +471,7 @@ class SkribblServer:
         for delay in reveal_times:
             time.sleep(delay)
             if self.game.current_word != word:
-                return  # turn changed
+                return
             self.game.reveal_hint_letter()
             hint = self.game.current_word_hint
             if hint:
@@ -513,7 +484,6 @@ class SkribblServer:
         if not text.strip():
             return
         word = self.game.current_word
-        # Guess check
         if (self.game.status == GameState.PLAYING
                 and word
                 and username != self.game.current_drawer
