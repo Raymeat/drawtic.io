@@ -1,4 +1,3 @@
-
 import socket
 import threading
 import json
@@ -7,7 +6,6 @@ from tkinter import ttk, messagebox, colorchooser
 import time
 import struct
 
-
 def send_msg(sock: socket.socket, data: dict) -> bool:
     try:
         payload = json.dumps(data).encode('utf-8')
@@ -15,7 +13,6 @@ def send_msg(sock: socket.socket, data: dict) -> bool:
         return True
     except Exception:
         return False
-
 
 def recv_msg(sock: socket.socket) -> dict | None:
     try:
@@ -29,7 +26,6 @@ def recv_msg(sock: socket.socket) -> dict | None:
         return json.loads(raw.decode('utf-8'))
     except Exception:
         return None
-
 
 def _recv_exact(sock: socket.socket, n: int) -> bytes | None:
     buf = b''
@@ -57,19 +53,17 @@ FONT_HEAD  = ("Segoe UI", 14, "bold")
 FONT_BODY  = ("Segoe UI", 11)
 FONT_MONO  = ("Consolas", 11)
 
-def styled_btn(parent, text, cmd, bg=ACCENT, fg=TEXT_MAIN, font=FONT_BODY, **kw):
+def styled_btn(parent, text, cmd, bg=ACCENT, fg=TEXT_MAIN, font=FONT_BODY, padx=14, pady=6, **kw):
     b = tk.Button(parent, text=text, command=cmd, bg=bg, fg=fg,
                   font=font, relief="flat", cursor="hand2",
                   activebackground=ACCENT2, activeforeground="#000",
-                  padx=14, pady=6, **kw)
+                  padx=padx, pady=pady, **kw)
     return b
-
 
 def styled_entry(parent, show=None, width=26, **kw):
     e = tk.Entry(parent, bg=BG_MID, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
                  font=FONT_BODY, relief="flat", width=width, show=show, **kw)
     return e
-
 
 def label(parent, text, font=FONT_BODY, fg=TEXT_MAIN, **kw):
     return tk.Label(parent, text=text, bg=parent.cget("bg"), fg=fg,
@@ -83,15 +77,19 @@ class AuthScreen(tk.Frame):
 
     def _build(self):
         self.pack(fill="both", expand=True)
-        # Centred card
         card = tk.Frame(self, bg=BG_CARD, padx=40, pady=36)
         card.place(relx=0.5, rely=0.5, anchor="center")
 
-        label(card, "🎨 Skribbl", font=FONT_TITLE, fg=ACCENT).pack(pady=(0,4))
+        label(card, "🎨 Drawtic.io", font=FONT_TITLE, fg=ACCENT).pack(pady=(0,4))
         label(card, "Draw & Guess with friends!", fg=TEXT_DIM).pack(pady=(0,20))
 
-        label(card, "Host").pack(anchor="w")
-        self.host_var = tk.StringVar(value="127.0.0.1")
+        host_frame = tk.Frame(card, bg=BG_CARD)
+        host_frame.pack(fill="x", anchor="w")
+        label(host_frame, "Host IP").pack(side="left")
+        styled_btn(host_frame, "🔍 Auto-Detect", self._auto_detect, 
+                   bg=BG_MID, font=("Segoe UI", 8), padx=8, pady=2).pack(side="right")
+                   
+        self.host_var = tk.StringVar(value="")
         styled_entry(card, textvariable=self.host_var).pack(fill="x", pady=(0,8))
 
         label(card, "Username").pack(anchor="w")
@@ -109,6 +107,32 @@ class AuthScreen(tk.Frame):
         btn_row.pack(fill="x")
         styled_btn(btn_row, "Login",    self._login,    bg=ACCENT).pack(side="left", expand=True, fill="x", padx=(0,4))
         styled_btn(btn_row, "Register", self._register, bg=BG_MID).pack(side="left", expand=True, fill="x", padx=(4,0))
+
+    def _auto_detect(self):
+        self.status.config(text="Searching local network...", fg=TEXT_DIM)
+        self.update() 
+        
+        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        udp_sock.settimeout(2.0) 
+        
+        try:
+            # KODE INI GA GW SENTUH SAMA SEKALI
+            udp_sock.sendto(b"DISCOVER_SKRIBBL_SERVER", ('<broadcast>', 9998))
+            data, addr = udp_sock.recvfrom(1024)
+            if data.startswith(b"SKRIBBL_SERVER_HERE"):
+                decoded = data.decode('utf-8')
+                parts = decoded.split(":")
+                server_ip = parts[1] if len(parts) > 1 else addr[0]
+                
+                self.host_var.set(server_ip) 
+                self.status.config(text=f"Server found at {server_ip}!", fg=SUCCESS)
+        except socket.timeout:
+            self.status.config(text="No server found on LAN.", fg=DANGER)
+        except Exception as e:
+            self.status.config(text=f"Network error: {e}", fg=DANGER)
+        finally:
+            udp_sock.close()
 
     def _connect(self) -> socket.socket | None:
         host = self.host_var.get().strip() or "127.0.0.1"
@@ -145,7 +169,6 @@ class AuthScreen(tk.Frame):
                         "password": self.pass_var.get()})
         resp = recv_msg(sock)
         if resp and resp.get("ok"):
-            # auto-login after register
             send_msg(sock, {"action":"login",
                             "username": self.user_var.get().strip(),
                             "password": self.pass_var.get()})
@@ -155,6 +178,104 @@ class AuthScreen(tk.Frame):
                 return
         sock.close()
         self.status.config(text=resp.get("message","Register failed") if resp else "No response")
+
+
+class RoomScreen(tk.Frame):
+    def __init__(self, master, sock: socket.socket, username: str, on_join, on_logout):
+        super().__init__(master, bg=BG_DARK)
+        self.sock = sock
+        self.username = username
+        self.on_join = on_join
+        self.on_logout = on_logout
+        self._build()
+        self.after(100, self._refresh_rooms)
+
+    def _build(self):
+        self.pack(fill="both", expand=True)
+        card = tk.Frame(self, bg=BG_CARD, padx=40, pady=36)
+        card.place(relx=0.5, rely=0.5, anchor="center")
+
+        header = tk.Frame(card, bg=BG_CARD)
+        header.pack(fill="x", pady=(0, 20))
+        
+        title_box = tk.Frame(header, bg=BG_CARD)
+        title_box.pack(side="left")
+        label(title_box, "🏠 Lobby", font=FONT_TITLE, fg=ACCENT).pack(anchor="w")
+        label(title_box, f"Welcome, {self.username}!", fg=TEXT_DIM).pack(anchor="w", pady=(2,0))
+
+        styled_btn(header, "🚪 Log Out", self._logout, bg=DANGER, font=("Segoe UI", 9), padx=10, pady=4).pack(side="right", anchor="ne")
+
+        list_frame = tk.Frame(card, bg=BG_MID)
+        list_frame.pack(fill="x", pady=(0, 10))
+        
+        self.room_listbox = tk.Listbox(list_frame, bg=BG_MID, fg=TEXT_MAIN, 
+                                       font=FONT_BODY, height=6, relief="flat", highlightthickness=0)
+        self.room_listbox.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+        
+        scroll = tk.Scrollbar(list_frame, command=self.room_listbox.yview)
+        scroll.pack(side="right", fill="y")
+        self.room_listbox.config(yscrollcommand=scroll.set)
+
+        btn_row1 = tk.Frame(card, bg=BG_CARD)
+        btn_row1.pack(fill="x", pady=(0, 16))
+        styled_btn(btn_row1, "Join Selected", self._join_room, bg=SUCCESS).pack(side="left", expand=True, fill="x", padx=(0,4))
+        styled_btn(btn_row1, "🔄 Refresh", self._refresh_rooms, bg=BG_MID).pack(side="left", expand=True, fill="x", padx=(4,0))
+
+        label(card, "Create New Room").pack(anchor="w")
+        self.new_room_var = tk.StringVar()
+        
+        create_row = tk.Frame(card, bg=BG_CARD)
+        create_row.pack(fill="x", pady=(0, 8))
+        
+        styled_entry(create_row, textvariable=self.new_room_var, width=16).pack(side="left", fill="x", expand=True, padx=(0, 4), ipady=4)
+        styled_btn(create_row, "Create", self._create_room, bg=ACCENT).pack(side="left")
+
+        self.status = label(card, "", fg=DANGER)
+        self.status.pack(pady=(0,8))
+
+    def _refresh_rooms(self):
+        send_msg(self.sock, {"action": "get_rooms"})
+        resp = recv_msg(self.sock)
+        if resp and resp.get("action") == "room_list":
+            self.room_listbox.delete(0, tk.END)
+            rooms = resp.get("rooms", [])
+            if not rooms:
+                self.room_listbox.insert(tk.END, "No active rooms...")
+            else:
+                for r in rooms:
+                    self.room_listbox.insert(tk.END, r)
+
+    def _create_room(self):
+        name = self.new_room_var.get().strip()
+        if name:
+            send_msg(self.sock, {"action": "create_room", "room_name": name})
+            self._wait_for_join()
+
+    def _join_room(self):
+        sel = self.room_listbox.curselection()
+        if not sel:
+            self.status.config(text="Select a room first!")
+            return
+        room_name = self.room_listbox.get(sel[0])
+        if room_name == "No active rooms...":
+            return
+            
+        send_msg(self.sock, {"action": "join_room", "room_name": room_name})
+        self._wait_for_join()
+
+    def _wait_for_join(self):
+        resp = recv_msg(self.sock)
+        if resp:
+            action = resp.get("action")
+            if action in ["joined_room", "joined_waiting_room"]:
+                is_waiting = (action == "joined_waiting_room")
+                self.on_join(resp.get("room_name"), is_waiting)
+            elif action == "system_message":
+                self.status.config(text=resp.get("text", "Error connecting to room."))
+                
+    def _logout(self):
+        self.on_logout()
+
 
 class DrawCanvas(tk.Frame):
     W, H = 680, 480
@@ -171,7 +292,6 @@ class DrawCanvas(tk.Frame):
         self._build()
 
     def _build(self):
-        # Toolbar
         self.toolbar = tk.Frame(self, bg=BG_MID, pady=6)
         self.toolbar.pack(fill="x")
 
@@ -199,7 +319,6 @@ class DrawCanvas(tk.Frame):
                   cursor="hand2", command=self._pick_color,
                   font=("Segoe UI",9)).pack(side="left", padx=4)
 
-        # Canvas
         self.canvas = tk.Canvas(self, width=self.W, height=self.H,
                                 bg="white", cursor="crosshair",
                                 highlightthickness=0)
@@ -216,7 +335,6 @@ class DrawCanvas(tk.Frame):
         self.canvas.config(cursor="crosshair" if enabled else "arrow")
 
     def set_toolbar_visible(self, visible: bool):
-        """Show toolbar only for the drawer; hide it for guessers."""
         if visible:
             self.toolbar.pack(fill="x", before=self.canvas)
         else:
@@ -273,6 +391,7 @@ class DrawCanvas(tk.Frame):
     def clear(self):
         self.canvas.delete("all")
 
+
 class ChatPanel(tk.Frame):
     def __init__(self, parent, on_send):
         super().__init__(parent, bg=BG_CARD)
@@ -298,7 +417,6 @@ class ChatPanel(tk.Frame):
         self._send_btn = styled_btn(row, "Send", self._send, bg=ACCENT)
         self._send_btn.pack(side="left", padx=(4,0))
 
-        # Tag colours
         self.log.tag_config("system",  foreground=TEXT_DIM)
         self.log.tag_config("correct", foreground=SUCCESS)
         self.log.tag_config("self_msg",foreground=ACCENT2)
@@ -306,7 +424,6 @@ class ChatPanel(tk.Frame):
         self.log.tag_config("name",    foreground=ACCENT, font=("Consolas",11,"bold"))
 
     def set_drawer_mode(self, is_drawer: bool):
-        """Lock chat input when this player is the drawer."""
         if is_drawer:
             self.entry.config(state="disabled", bg=BG_DARK)
             self._send_btn.config(state="disabled", bg=BG_DARK)
@@ -381,6 +498,9 @@ class InfoBar(tk.Frame):
         self.round_lbl = label(self, "Round — / —", fg=TEXT_DIM, font=FONT_BODY)
         self.round_lbl.pack(side="left", padx=16)
 
+        self.cat_lbl = label(self, "", fg=ACCENT2, font=("Segoe UI", 12, "bold"))
+        self.cat_lbl.pack(side="left", padx=(10, 0))
+
         self.word_lbl = label(self, "", fg=ACCENT, font=("Segoe UI",16,"bold"))
         self.word_lbl.pack(side="left", expand=True)
 
@@ -392,6 +512,9 @@ class InfoBar(tk.Frame):
 
     def set_round(self, n: int, total: int):
         self.round_lbl.config(text=f"Round {n}/{total}")
+
+    def set_category(self, cat: str):
+        self.cat_lbl.config(text=f"[{cat}]" if cat else "")
 
     def set_word(self, text: str):
         self.word_lbl.config(text=text)
@@ -420,20 +543,20 @@ class InfoBar(tk.Frame):
         self.timer_lbl.config(text="⏱ —", fg=TEXT_DIM)
 
 
-class WordChoiceDialog(tk.Toplevel):
-    def __init__(self, parent, choices: list[str], on_choice, seconds=15):
+class VoteDialog(tk.Toplevel):
+    def __init__(self, parent, choices: list[str], on_choice, seconds=10):
         super().__init__(parent)
-        self.title("Choose a word!")
+        self.title("Vote for a Category!")
         self.configure(bg=BG_DARK)
         self.resizable(False, False)
         self.grab_set()
         self._choice = None
         self._build(choices, on_choice, seconds)
-        self.protocol("WM_DELETE_WINDOW", lambda: None)  # prevent close
+        self.protocol("WM_DELETE_WINDOW", lambda: None) 
 
     def _build(self, choices, on_choice, seconds):
-        label(self, "✏️  Choose your word!", font=FONT_HEAD, fg=ACCENT).pack(pady=16, padx=30)
-        self.timer = label(self, f"Auto-picks in {seconds}s", fg=TEXT_DIM)
+        label(self, "🗳️ Vote for a category!", font=FONT_HEAD, fg=ACCENT).pack(pady=16, padx=30)
+        self.timer = label(self, f"Voting ends in {seconds}s", fg=TEXT_DIM)
         self.timer.pack()
         remaining = [seconds]
 
@@ -445,16 +568,16 @@ class WordChoiceDialog(tk.Toplevel):
                     on_choice(choices[0])
                     self.destroy()
                 return
-            self.timer.config(text=f"Auto-picks in {remaining[0]}s")
+            self.timer.config(text=f"Voting ends in {remaining[0]}s")
             self.after(1000, tick)
 
         self.after(1000, tick)
 
         for c in choices:
-            def pick(word=c):
+            def pick(cat=c):
                 if self._choice is None:
-                    self._choice = word
-                    on_choice(word)
+                    self._choice = cat
+                    on_choice(cat)
                     self.destroy()
             styled_btn(self, c.upper(), pick, bg=ACCENT,
                        font=("Segoe UI",13,"bold")).pack(fill="x", padx=30, pady=4)
@@ -493,54 +616,66 @@ def show_results(parent, title: str, rankings: list[dict], all_time: list[dict] 
 
 
 class GameScreen(tk.Frame):
-    def __init__(self, master, sock: socket.socket, username: str):
+    def __init__(self, master, sock: socket.socket, username: str, room_name: str, on_leave, is_waiting=False):
         super().__init__(master, bg=BG_DARK)
         self.sock     = sock
         self.username = username
+        self.room_name = room_name
+        self.on_leave = on_leave
+        self.is_waiting = is_waiting
         self.is_drawer = False
+        self._running = True  
         self._build()
         self.pack(fill="both", expand=True)
-        # Kick off recv loop
+        
         t = threading.Thread(target=self._recv_loop, daemon=True)
         t.start()
-        # Ask for current players
+        
         send_msg(sock, {"action":"get_players"})
 
     def _build(self):
-        # Top bar
         self.info_bar = InfoBar(self)
         self.info_bar.pack(fill="x", side="top")
 
-        # Main area
         mid = tk.Frame(self, bg=BG_DARK)
         mid.pack(fill="both", expand=True)
 
-        # Left: player panel
         self.player_panel = PlayerPanel(mid)
         self.player_panel.pack(side="left", fill="y", padx=(8,0), pady=8)
 
-        # Centre: canvas
         self.draw_canvas = DrawCanvas(mid,
             on_draw=self._on_local_draw,
             on_clear=self._on_local_clear)
-        self.draw_canvas.pack(side="left", padx=8, pady=8)
         self.draw_canvas.set_enabled(False)
 
-        # Right: chat
         self.chat = ChatPanel(mid, on_send=self._on_chat_send)
-        self.chat.pack(side="left", fill="both", expand=True, padx=(0,8), pady=8)
 
-        # Bottom: start button (lobby only)
+        self.waiting_frame = tk.Frame(mid, bg=BG_CARD)
+        label(self.waiting_frame, "⏳ WAITING ROOM", font=("Segoe UI", 24, "bold"), fg=ACCENT).pack(pady=(120, 10))
+        label(self.waiting_frame, "A round is currently in progress.", fg=TEXT_DIM).pack()
+        label(self.waiting_frame, "You will join automatically once Ronde Selanjutnya (the NEXT ROUND) begins.", fg=TEXT_DIM).pack(pady=(2,0))
+
+        if self.is_waiting:
+            self.waiting_frame.pack(side="left", fill="both", expand=True, padx=8, pady=8)
+        else:
+            self.draw_canvas.pack(side="left", padx=8, pady=8)
+            self.chat.pack(side="left", fill="both", expand=True, padx=(0,8), pady=8)
+
         self.bottom = tk.Frame(self, bg=BG_MID, pady=8)
         self.bottom.pack(fill="x", side="bottom")
+        
         self.start_btn = styled_btn(self.bottom, "▶  Start Game", self._start_game,
                                     bg=SUCCESS, font=FONT_HEAD)
-        self.start_btn.pack()
-        self.status_lbl = label(self.bottom, f"Logged in as: {self.username}",
+        if not self.is_waiting:
+            self.start_btn.pack(side="left", padx=16)
+        
+        self.status_lbl = label(self.bottom, f"Logged in as: {self.username}  |  Room: {self.room_name}",
                                 fg=TEXT_DIM, font=("Segoe UI",9))
-        self.status_lbl.pack()
+        self.status_lbl.pack(side="left", padx=(16 if self.is_waiting else 0, 0))
 
-    # ── Send helpers ──
+        self.leave_btn = styled_btn(self.bottom, "🚪 Leave Room", self._leave_room, bg=DANGER, font=("Segoe UI", 9))
+        self.leave_btn.pack(side="right", padx=16)
+
     def _on_local_draw(self, data: dict):
         send_msg(self.sock, {"action":"draw","data":data})
 
@@ -548,25 +683,48 @@ class GameScreen(tk.Frame):
         send_msg(self.sock, {"action":"clear_canvas"})
 
     def _on_chat_send(self, text: str):
-
         send_msg(self.sock, {"action":"chat","text":text})
 
     def _start_game(self):
         send_msg(self.sock, {"action":"start_game"})
+        
+    def _leave_room(self):
+        self._running = False
+        send_msg(self.sock, {"action": "leave_room"})
 
-    # ── Receive loop (background thread) ──
     def _recv_loop(self):
-        while True:
+        while self._running:
             msg = recv_msg(self.sock)
             if msg is None:
-                self.after(0, lambda: messagebox.showerror("Disconnected","Lost connection to server."))
+                if self._running:
+                    self.after(0, lambda: messagebox.showerror("Disconnected","Lost connection to server."))
                 break
             self.after(0, self._handle, msg)
 
     def _handle(self, msg: dict):
+        if not self.winfo_exists():
+            return  
+            
         action = msg.get("action")
 
-        if action == "player_joined":
+        if action == "left_room_ack":
+            self.on_leave()
+            return
+
+        elif action == "waiting_sync":
+            self.info_bar.start_timer(msg.get("seconds", 0))
+            self.player_panel.update_players(msg.get("rankings", []))
+            self.info_bar.set_category(msg.get("category", ""))
+            self.info_bar.set_word("Waiting for the next round...")
+
+        elif action == "promoted":
+            self.is_waiting = False
+            self.waiting_frame.pack_forget()
+            self.draw_canvas.pack(side="left", padx=8, pady=8)
+            self.chat.pack(side="left", fill="both", expand=True, padx=(0,8), pady=8)
+            self.chat.append("✅ You have joined the game!", "system")
+
+        elif action == "player_joined":
             self.player_panel.simple_list(msg.get("players",[]))
             self.chat.append(f"⚡ {msg['username']} joined", "system")
 
@@ -581,28 +739,33 @@ class GameScreen(tk.Frame):
             self.chat.append("🎮 Game started!", "system")
             self.info_bar.set_round(1, msg.get("rounds",3))
 
+        elif action == "vote_category":
+            choices = msg.get("choices",[])
+            seconds = msg.get("seconds",10)
+            self.info_bar.set_word("Voting for Category...")
+            VoteDialog(self, choices,
+                       on_choice=lambda c: send_msg(self.sock, {"action":"submit_vote","category":c}),
+                       seconds=seconds)
+
         elif action == "new_turn":
             drawer = msg.get("drawer","")
             rnd    = msg.get("round",1)
             total  = msg.get("total_rounds",3)
+            rankings = msg.get("rankings", [])
+            
             self.info_bar.set_round(rnd, total)
             self.info_bar.set_drawer(drawer)
+            self.info_bar.set_category(msg.get("category", ""))
             self.info_bar.set_word("…")
             self.info_bar.stop_timer()
             self.draw_canvas.clear()
             self.is_drawer = (drawer == self.username)
-            # Fix 2: lock chat for drawer; Fix 3: show palette only for drawer
             self.draw_canvas.set_enabled(self.is_drawer)
             self.draw_canvas.set_toolbar_visible(self.is_drawer)
             self.chat.set_drawer_mode(self.is_drawer)
+            
+            self.player_panel.update_players(rankings, drawer)
             self.chat.append(f"─── Round {rnd}/{total} ·  {drawer} draws ───", "system")
-
-        elif action == "choose_word":
-            choices = msg.get("choices",[])
-            seconds = msg.get("seconds",15)
-            WordChoiceDialog(self, choices,
-                             on_choice=lambda w: send_msg(self.sock, {"action":"choose_word","word":w}),
-                             seconds=seconds)
 
         elif action == "turn_started":
             secs = msg.get("seconds", 80)
@@ -653,18 +816,29 @@ class GameScreen(tk.Frame):
             all_time = msg.get("all_time",[])
             self.chat.append("🏁 Game over!", "system")
             show_results(self, "🏆 Game Over – Final Scores", final, all_time)
-            self.start_btn.pack()
+            
+            if self.is_waiting:
+                self.waiting_frame.pack_forget()
+                self.is_waiting = False
+                
+            self.start_btn.pack(side="left", padx=16)
+            self.info_bar.set_category("")
             self.info_bar.set_word("")
             self.info_bar.stop_timer()
             self.info_bar.set_round(0, 0)
             self.info_bar.drawer_lbl.config(text="")
-            # Reset to lobby state: toolbar hidden, chat unlocked
             self.draw_canvas.set_toolbar_visible(False)
             self.draw_canvas.set_enabled(False)
             self.chat.set_drawer_mode(False)
+            
+            self.player_panel.simple_list(msg.get("players", []))
 
         elif action == "system_message":
-            self.chat.append(f"ℹ️  {msg.get('text','')}", "system")
+            text = msg.get('text','')
+            if "Error connecting" in text or "Cannot join" in text:
+                 messagebox.showwarning("System", text)
+            else:
+                 self.chat.append(f"ℹ️  {text}", "system")
 
         elif action == "leaderboard":
             data = msg.get("data",[])
@@ -674,11 +848,13 @@ class GameScreen(tk.Frame):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("🎨 Skribbl  —  Draw & Guess")
+        self.title("🎨 Drawtic.io  —  Draw & Guess")
         self.configure(bg=BG_DARK)
         self.geometry("1080x680")
         self.minsize(900, 620)
         self._current = None
+        self.sock = None
+        self.username = None
         self._show_auth()
 
     def _show_auth(self):
@@ -687,11 +863,33 @@ class App(tk.Tk):
         self._current = AuthScreen(self, self._on_auth)
 
     def _on_auth(self, sock: socket.socket, username: str, message: str):
+        self.sock = sock
+        self.username = username
+        self._show_lobby()
+
+    def _show_lobby(self):
         if self._current:
             self._current.destroy()
-        self._current = GameScreen(self, sock, username)
-        self.title(f"🎨 Skribbl  —  {username}")
+        self._current = RoomScreen(self, self.sock, self.username, self._on_room_join, self._on_logout)
+        self.title(f"🎨 Drawtic.io  —  {self.username} (Lobby)")
 
+    def _on_room_join(self, room_name: str, is_waiting: bool = False):
+        if self._current:
+            self._current.destroy()
+        self._current = GameScreen(self, self.sock, self.username, room_name, self._show_lobby, is_waiting)
+        mode = "Waiting Room" if is_waiting else "Room"
+        self.title(f"🎨 Drawtic.io  —  {self.username}  |  {mode}: {room_name}")
+
+    def _on_logout(self):
+        if self.sock:
+            send_msg(self.sock, {"action": "logout"})
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            self.sock = None
+        self.username = None
+        self._show_auth()
 
 if __name__ == "__main__":
     app = App()
