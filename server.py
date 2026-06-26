@@ -14,6 +14,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Retrieves the local network IP address of the host machine for discovery.
 def get_real_ip():
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -27,7 +28,7 @@ def get_real_ip():
         except:
             return "127.0.0.1"
 
-# --- JSON Dictionary Management ---
+# JSON Dictionary Management
 DEFAULT_WORDS = {
     "Animals": ["dog", "cat", "elephant", "lion", "tiger", "zebra", "monkey", "giraffe", "penguin", "kangaroo"],
     "Food": ["pizza", "burger", "apple", "banana", "coffee", "sandwich", "noodle", "orange", "pancake"],
@@ -36,6 +37,7 @@ DEFAULT_WORDS = {
     "Professions": ["doctor", "teacher", "police", "artist", "farmer", "pilot", "nurse", "scientist", "chef"]
 }
 
+# Loads custom categories and words from words.json, falling back to defaults if missing.
 def load_words():
     filepath = "words.json"
     if os.path.exists(filepath):
@@ -60,6 +62,7 @@ def load_words():
 WORD_DATA = load_words()
 
 
+# Encodes data to JSON and transmits it with a 4-byte big-endian length prefix.
 def send_msg(sock: socket.socket, data: dict) -> bool:
     try:
         payload = json.dumps(data).encode('utf-8')
@@ -69,6 +72,7 @@ def send_msg(sock: socket.socket, data: dict) -> bool:
     except Exception:
         return False
 
+# Reads a length prefix, pulls the full payload, and parses it back into a Python dictionary.
 def recv_msg(sock: socket.socket) -> dict | None:
     try:
         raw_len = _recv_exact(sock, 4)
@@ -82,6 +86,7 @@ def recv_msg(sock: socket.socket) -> dict | None:
     except Exception:
         return None
 
+# Blocks and reads exactly n bytes from a network socket, handling fragmentation safely.
 def _recv_exact(sock: socket.socket, n: int) -> bytes | None:
     buf = b''
     while len(buf) < n:
@@ -101,6 +106,7 @@ class UserManager:
         self._lock = threading.Lock()
         self._load_users()
 
+    # Parses credentials from user.txt into memory at startup.
     def _load_users(self):
         if os.path.exists(self.filename):
             try:
@@ -116,6 +122,7 @@ class UserManager:
         else:
             logger.info(f"No existing user file found at {self.filename}. A new one will be created.")
 
+    # Flushes memory-cached credentials back down to user.txt.
     def _save_users(self):
         try:
             with open(self.filename, 'w', encoding='utf-8') as f:
@@ -124,9 +131,11 @@ class UserManager:
         except Exception as e:
             logger.error(f"Failed to save users: {e}")
 
+    # Computes a secure SHA-256 string representation of a password string.
     def _hash(self, pw: str) -> str:
         return hashlib.sha256(pw.encode()).hexdigest()
 
+    # Validates and writes new user credentials if the username is free.
     def register(self, username: str, password: str) -> tuple[bool, str]:
         with self._lock:
             if not username or not password:
@@ -141,6 +150,7 @@ class UserManager:
             logger.info(f"Registered user: {username}")
             return True, "Registration successful."
 
+    # Authenticates user credentials against saved password hashes.
     def login(self, username: str, password: str) -> tuple[bool, str]:
         with self._lock:
             if username not in self._users:
@@ -154,15 +164,18 @@ class Leaderboard:
         self._scores: dict[str, int] = {}
         self._lock = threading.Lock()
 
+    # Incrementally aggregates match score values for a profile.
     def add_score(self, username: str, points: int):
         with self._lock:
             self._scores[username] = self._scores.get(username, 0) + points
 
+    # Standardizes or zeros local match statistics for current room entrants.
     def reset_game_scores(self, players: list[str]):
         with self._lock:
             for p in players:
                 self._scores.setdefault(p, 0)
 
+    # Extracts and sorts current lobby players descending by match point totals.
     def get_rankings(self, players: list[str]) -> list[dict]:
         with self._lock:
             ranked = sorted(
@@ -174,6 +187,7 @@ class Leaderboard:
                 r["rank"] = i + 1
             return ranked
 
+    # Grabs the top 10 global highest-scoring server accounts.
     def get_all_time(self) -> list[dict]:
         with self._lock:
             ranked = sorted(
@@ -206,8 +220,6 @@ class GameState:
         self.turn_start: float | None = None
         self.guessed: set[str] = set()       
         self.leaderboard = Leaderboard() 
-        
-        # --- NEW: Round Category & Word memory ---
         self.word_data = WORD_DATA
         self.categories = list(self.word_data.keys())
         self.current_category: str = ""
@@ -222,13 +234,16 @@ class GameState:
         self._ending_turn: bool = False                 
         self._lock = threading.Lock()
 
+    # Converts standard words into blank string underscore patterns.
     def _make_hint(self, word: str) -> str:
         return ''.join(['_' if c != ' ' else ' ' for c in word])
 
+    # Grabs a random list selection of up to three potential game topics.
     def pick_category_choices(self) -> list[str]:
         num_choices = min(3, len(self.categories))
         return random.sample(self.categories, num_choices)
 
+    # Extracts an unrepeated hidden word option from targeted lists.
     def pick_word_from_category(self, category: str) -> str:
         pool = self.word_data.get(category, [])
         if not pool:
@@ -236,7 +251,7 @@ class GameState:
             
         valid = [w for w in pool if w not in self.recent_words]
         if not valid:
-            valid = pool # Reset constraints if every word in category is exhausted
+            valid = pool
             
         word = random.choice(valid)
         self.recent_words.append(word)
@@ -244,6 +259,7 @@ class GameState:
             self.recent_words.pop(0) 
         return word
 
+    # Initializes state objects, sets round limits, and shuffles baseline player positions.
     def start_game(self):
         with self._lock:
             random.shuffle(self.players)
@@ -257,6 +273,7 @@ class GameState:
             self.current_word_hint = None
             self.recent_words.clear()
 
+    # Locks in current match answers and captures current UNIX epoch timing boundaries.
     def set_word(self, word: str) -> bool:
         with self._lock:
             if self.current_word is not None:
@@ -267,6 +284,7 @@ class GameState:
             self.guessed = set()
             return True
 
+    # Uncovers random matching characters within current active player hints.
     def reveal_hint_letter(self):
         with self._lock:
             if not self.current_word or not self.current_word_hint:
@@ -279,19 +297,23 @@ class GameState:
             hint[idx] = self.current_word[idx]
             self.current_word_hint = ''.join(hint)
 
+    # Gauges remaining match intervals by subtracting active run duration.
     def time_remaining(self) -> int:
         if self.turn_start is None:
             return self.ROUND_DURATION
         elapsed = time.time() - self.turn_start
         return max(0, int(self.ROUND_DURATION - elapsed))
 
+    # Scales awarded point allocations dynamically against remaining game clocks.
     def score_for_guess(self) -> int:
         time_left = self.time_remaining()
         return max(50, 100 + int(time_left * 1.5))
 
+    # Awards additional bonus points to artists when active players guess words.
     def drawer_bonus(self, guessers: int) -> int:
         return guessers * 30
 
+    # Advances active drawing indexes or terminates games when round capacities cap out.
     def next_turn(self) -> bool:
         with self._lock:
             self.turn_index += 1
@@ -333,6 +355,7 @@ class DrawticServer:
         self._server_sock: socket.socket | None = None
         self.real_ip = get_real_ip()
 
+    # Spawns a UDP broadcast response engine helping client setups autodetect network nodes.
     def _start_discovery_service(self):
         udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -347,6 +370,7 @@ class DrawticServer:
             except Exception as e:
                 logger.error(f"Discovery error: {e}")
 
+    # Runs the master socket processing loops that handle multi-user socket registration steps.
     def start(self):
         discovery_thread = threading.Thread(target=self._start_discovery_service, daemon=True)
         discovery_thread.start()
@@ -372,6 +396,7 @@ class DrawticServer:
         finally:
             self._server_sock.close()
 
+    # Distributes explicit JSON strings across designated client target connections.
     def broadcast_to_room(self, room_name: str, data: dict, exclude: str | None = None, include_waiting=False):
         if room_name not in self.rooms:
             return
@@ -393,12 +418,14 @@ class DrawticServer:
             for uname in dead:
                 self._remove_client(uname)
 
+    # Delivers targeted network updates toward individual target client descriptors.
     def send_to(self, username: str, data: dict):
         with self.client_lock:
             sock = self.clients.get(username)
         if sock:
             send_msg(sock, data)
 
+    # Master input reader threading loop analyzing dynamic user data packets.
     def _handle_client(self, conn: socket.socket):
         username = None
         try:
@@ -511,11 +538,13 @@ class DrawticServer:
                 logger.info(f"Player disconnected completely: {username}")
             conn.close()
 
+    # Cleans out connection indexing tables during abrupt network dropouts.
     def _remove_client(self, username: str):
         with self.client_lock:
             self.clients.pop(username, None)
             self.authenticated.discard(username)
 
+    # Enrolls actors within active or staging game room hierarchies.
     def _join_room(self, username: str, room_name: str):
         self._leave_current_room(username) 
         
@@ -545,6 +574,7 @@ class DrawticServer:
             })
             logger.info(f"{username} joined {room_name}. Players: {game.players}")
         
+    # Evicts active actors from metadata storage structures and shifts turn parameters.
     def _leave_current_room(self, username: str):
         room_name = self.player_rooms.pop(username, None)
         if room_name and room_name in self.rooms:
@@ -575,6 +605,7 @@ class DrawticServer:
                 self.rooms.pop(room_name, None)
                 logger.info(f"Room {room_name} destroyed (empty).")
 
+    # Validates minimal lobby numbers before issuing starting indicators.
     def _try_start_game(self, requester: str, room_name: str, game: GameState):
         if len(game.players) < self.MIN_PLAYERS:
             self.send_to(requester, {
@@ -596,6 +627,7 @@ class DrawticServer:
         })
         self._begin_round_vote(room_name, game)
 
+    # Transmits voting invitations and schedules transition windows via timers.
     def _begin_round_vote(self, room_name: str, game: GameState):
         choices = game.pick_category_choices()
         game.category_choices = choices
@@ -615,6 +647,7 @@ class DrawticServer:
         game.pick_timer.daemon = True
         game.pick_timer.start()
 
+    # Compiles collected submission entries to advance active canvas queues.
     def _end_voting(self, room_name: str, game: GameState):
         with game._lock:
             if getattr(game, '_voting_ended', False):
@@ -643,6 +676,7 @@ class DrawticServer:
 
         self._begin_drawer_turn(room_name, game)
 
+    # Dispatches round structural frameworks toward drawing structures.
     def _begin_drawer_turn(self, room_name: str, game: GameState):
         drawer = game.current_drawer
         chosen_word = game.pick_word_from_category(game.current_category)
@@ -660,6 +694,7 @@ class DrawticServer:
 
         self._start_turn_with_word(room_name, game, chosen_word)
 
+    # Delivers masked visibility models separate from original master values.
     def _start_turn_with_word(self, room_name: str, game: GameState, word: str):
         if not game.set_word(word):
             return
@@ -692,6 +727,7 @@ class DrawticServer:
         game.hint_thread = threading.Thread(target=self._hint_reveal_loop, args=(room_name, game), daemon=True)
         game.hint_thread.start()
 
+    # Background loops that leak partial answer text characters over time.
     def _hint_reveal_loop(self, room_name: str, game: GameState):
         word = game.current_word
         if not word:
@@ -709,6 +745,7 @@ class DrawticServer:
                     "hint": ' '.join(hint)
                 })
 
+    # Evaluates standard message lines for correct text answer values.
     def _handle_chat(self, username: str, room_name: str, game: GameState, text: str):
         if not text.strip():
             return
@@ -728,6 +765,7 @@ class DrawticServer:
             "timestamp": datetime.now().strftime("%H:%M")
         })
 
+    # Logs points and checks if all guessers solved the puzzle early.
     def _on_correct_guess(self, username: str, room_name: str, game: GameState):
         pts = game.score_for_guess()
         game.guessed.add(username)
@@ -745,9 +783,11 @@ class DrawticServer:
         if non_drawers and non_drawers <= game.guessed:
             self._end_turn(room_name, game, all_guessed=True)
 
+    # Forces game turns to wrap up when the countdown hits zero.
     def _on_turn_timeout(self, room_name: str, game: GameState):
         self._end_turn(room_name, game, all_guessed=False)
 
+    # Tallies artist bonuses, shares scores, and forwards steps to next rounds.
     def _end_turn(self, room_name: str, game: GameState, all_guessed: bool):
         with game._lock:
             if getattr(game, '_ending_turn', False):
@@ -783,11 +823,7 @@ class DrawticServer:
 
         has_next = game.next_turn()
         if has_next:
-            # --- FIX: Waiting Room players are ONLY promoted into the active game
-            # once a FULL ROUND has just finished (turn_index wraps back to 0,
-            # meaning every current player has already had their turn this round).
-            # This stops a new player from being yanked into a round that's
-            # already in progress.
+            # Waiting Room players are onlypromoted into the active game.
             if game.turn_index == 0:
                 with game._lock:
                     if game.waiting_players:
@@ -802,7 +838,7 @@ class DrawticServer:
 
             self.broadcast_to_room(room_name, {"action":"clear_canvas"})
             
-            # --- NEW: Check if this is the start of a new round for voting ---
+            # Check if this is the start of a new round for voting.
             if game.turn_index == 0:
                 self._begin_round_vote(room_name, game)
             else:
@@ -810,6 +846,7 @@ class DrawticServer:
         else:
             self._end_game(room_name, game)
 
+    # Flushes local matches and returns room structures back to staging states.
     def _end_game(self, room_name: str, game: GameState):
         with game._lock:
             if game.waiting_players:
