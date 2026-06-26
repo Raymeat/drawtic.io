@@ -74,3 +74,8 @@ python client.py
 * `client.py` — Tkinter desktop client: auth screen, lobby, drawing canvas, chat, and live leaderboards.
 * `words.json` *(auto-generated)* — Editable word bank, organized by category.
 * `user.txt` *(auto-generated)* — Stores registered accounts (hashed passwords only).
+
+## User & Password
+1. budi = budi123
+2. asep = asep123
+3. hari = hari123
