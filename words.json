@@ -1,0 +1,58 @@
+{
+    "Animals": [
+        "dog",
+        "cat",
+        "elephant",
+        "lion",
+        "tiger",
+        "zebra",
+        "monkey",
+        "giraffe",
+        "penguin",
+        "kangaroo"
+    ],
+    "Food": [
+        "pizza",
+        "burger",
+        "apple",
+        "banana",
+        "coffee",
+        "sandwich",
+        "noodle",
+        "orange",
+        "pancake"
+    ],
+    "Objects": [
+        "car",
+        "guitar",
+        "house",
+        "piano",
+        "umbrella",
+        "helmet",
+        "camera",
+        "telephone",
+        "telescope"
+    ],
+    "Nature": [
+        "mountain",
+        "river",
+        "forest",
+        "volcano",
+        "ocean",
+        "desert",
+        "rainbow",
+        "tornado",
+        "waterfall"
+    ],
+    "Professions": [
+        "doctor",
+        "teacher",
+        "police",
+        "artist",
+        "farmer",
+        "pilot",
+        "nurse",
+        "scientist",
+        "chef"
+    ]
+}
