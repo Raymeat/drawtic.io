@@ -7,8 +7,10 @@ import time
 import struct
 import select
 
+# NETWORK CONSTANTS & MESSAGE FRAMING HELPERS
 DISCOVERY_PORT = 9998
 
+# Prefixes the JSON payload with a 4-byte length header and sends it over TCP.
 def send_msg(sock: socket.socket, data: dict) -> bool:
     try:
         payload = json.dumps(data).encode('utf-8')
@@ -17,6 +19,7 @@ def send_msg(sock: socket.socket, data: dict) -> bool:
     except Exception:
         return False
 
+# Reads the 4-byte length header first, then fetches and decodes the full JSON message.
 def recv_msg(sock: socket.socket) -> dict | None:
     try:
         raw_len = _recv_exact(sock, 4)
@@ -30,6 +33,7 @@ def recv_msg(sock: socket.socket) -> dict | None:
     except Exception:
         return None
 
+# Blocks and accumulates data chunks until exactly 'n' bytes are read from the stream.
 def _recv_exact(sock: socket.socket, n: int) -> bytes | None:
     buf = b''
     while len(buf) < n:
@@ -42,21 +46,10 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes | None:
         buf += chunk
     return buf
 
-def get_all_local_ips() -> list[str]:
-    """
-    Mengumpulkan SEMUA alamat IPv4 lokal milik device ini, dari SEMUA network
-    adapter yang aktif (WiFi, Ethernet, VirtualBox Host-Only, VMware vEthernet,
-    Docker/WSL, Hamachi, VPN, Tailscale, dll) -- bukan hanya satu IP yang
-    "ditebak" lewat rute default seperti sebelumnya.
+# LOCAL IP DETECTION UTILITY
 
-    ROOT CAUSE auto-detect gagal: dulu broadcast UDP dikirim lewat socket yang
-    tidak diikat (bind) ke interface tertentu, sehingga OS bebas memilih lewat
-    adapter MANA paket itu keluar. Kalau ada adapter virtual/VPN yang kebetulan
-    jadi rute default, broadcast bisa keluar lewat adapter virtual itu dan TIDAK
-    PERNAH sampai ke WiFi/hotspot yang sebenarnya dipakai -- walau dua device
-    sebenarnya satu subnet. Dengan mengetahui semua IP lokal di sini, kita bisa
-    kirim broadcast secara eksplisit lewat SETIAP adapter (lihat _auto_detect).
-    """
+# Gathers all active, non-loopback IPv4 addresses assigned to the machine's interfaces.
+def get_all_local_ips() -> list[str]:
     ips: set[str] = set()
 
     try:
@@ -76,9 +69,6 @@ def get_all_local_ips() -> list[str]:
     except Exception:
         pass
 
-    # Probe beberapa tujuan umum: trik ini TIDAK mengirim data apa pun (UDP
-    # connect() cuma menentukan rute), tapi membantu memunculkan IP adapter
-    # lain yang kadang tidak ikut terdaftar lewat hostname di atas.
     probe_targets = ["8.8.8.8", "1.1.1.1", "192.168.1.1", "192.168.0.1", "192.168.56.1"]
     for target in probe_targets:
         try:
@@ -94,6 +84,8 @@ def get_all_local_ips() -> list[str]:
 
     return list(ips)
 
+# UI CONFIGURATION & STYLED COMPONENT WRAPPERS
+
 BG_DARK    = "#1e1e2e"
 BG_MID     = "#2a2a3e"
 BG_CARD    = "#313147"
@@ -108,6 +100,7 @@ FONT_HEAD  = ("Segoe UI", 14, "bold")
 FONT_BODY  = ("Segoe UI", 11)
 FONT_MONO  = ("Consolas", 11)
 
+# Factory helper to instantiate a uniformly styled dark-theme button widget.
 def styled_btn(parent, text, cmd, bg=ACCENT, fg=TEXT_MAIN, font=FONT_BODY, padx=14, pady=6, **kw):
     b = tk.Button(parent, text=text, command=cmd, bg=bg, fg=fg,
                   font=font, relief="flat", cursor="hand2",
@@ -115,14 +108,19 @@ def styled_btn(parent, text, cmd, bg=ACCENT, fg=TEXT_MAIN, font=FONT_BODY, padx=
                   padx=padx, pady=pady, **kw)
     return b
 
+# Factory helper to instantiate a uniformly styled dark-theme text entry widget.
 def styled_entry(parent, show=None, width=26, **kw):
     e = tk.Entry(parent, bg=BG_MID, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
                  font=FONT_BODY, relief="flat", width=width, show=show, **kw)
     return e
 
+# Factory helper to instantiate a uniformly styled text label widget.
 def label(parent, text, font=FONT_BODY, fg=TEXT_MAIN, **kw):
     return tk.Label(parent, text=text, bg=parent.cget("bg"), fg=fg,
                     font=font, **kw)
+
+
+# AUTHENTICATION SCREEN INTERFACE
 
 class AuthScreen(tk.Frame):
     def __init__(self, master, on_auth):
@@ -130,6 +128,7 @@ class AuthScreen(tk.Frame):
         self.on_auth = on_auth
         self._build()
 
+    # Assembles form fields, inputs, and action triggers on the login card layout.
     def _build(self):
         self.pack(fill="both", expand=True)
         card = tk.Frame(self, bg=BG_CARD, padx=40, pady=36)
@@ -163,6 +162,7 @@ class AuthScreen(tk.Frame):
         styled_btn(btn_row, "Login",    self._login,    bg=ACCENT).pack(side="left", expand=True, fill="x", padx=(0,4))
         styled_btn(btn_row, "Register", self._register, bg=BG_MID).pack(side="left", expand=True, fill="x", padx=(4,0))
 
+    # Broadcasts UDP discovery signals across the local network to auto-detect a hosting server.
     def _auto_detect(self):
         self.status.config(text="Searching local network...", fg=TEXT_DIM)
         self.update() 
@@ -170,9 +170,6 @@ class AuthScreen(tk.Frame):
         sockets: list[socket.socket] = []
         found_ip = None
         try:
-            # KODE INI GA GW SENTUH SAMA SEKALI -> diganti jadi multi-interface
-            # karena 1 socket "default" saja terbukti tidak cukup di Windows
-            # ketika ada banyak adapter (VirtualBox/VMware/Hamachi/VPN/Tailscale).
             local_ips = get_all_local_ips()
 
             for ip in local_ips:
@@ -180,17 +177,12 @@ class AuthScreen(tk.Frame):
                     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-                    # Bind ke IP adapter spesifik ini supaya paket broadcast
-                    # benar-benar keluar lewat adapter tersebut, bukan lewat
-                    # adapter "default" pilihan OS yang bisa saja salah.
                     s.bind((ip, 0))
                     s.setblocking(False)
                     sockets.append(s)
                 except Exception:
                     continue
 
-            # Fallback: kalau semua bind ke IP spesifik gagal (jarang terjadi),
-            # tetap coba cara lama supaya fitur tidak mati total.
             if not sockets:
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -198,9 +190,6 @@ class AuthScreen(tk.Frame):
                 s.setblocking(False)
                 sockets.append(s)
 
-            # Target: broadcast umum + broadcast langsung tiap subnet
-            # (mis. 192.168.1.255) dari setiap adapter yang ditemukan, supaya
-            # tetap jalan walau salah satu jenis broadcast difilter router.
             targets = {"255.255.255.255"}
             for ip in local_ips:
                 octets = ip.split(".")
@@ -249,6 +238,7 @@ class AuthScreen(tk.Frame):
                 except Exception:
                     pass
 
+    # Opens a direct TCP socket channel to the specified host IP address on port 9999.
     def _connect(self) -> socket.socket | None:
         host = self.host_var.get().strip() or "127.0.0.1"
         try:
@@ -261,6 +251,7 @@ class AuthScreen(tk.Frame):
             self.status.config(text=f"Cannot connect: {e}")
             return None
 
+    # Authenticates user input credentials via synchronous challenge message pairs.
     def _login(self):
         sock = self._connect()
         if not sock:
@@ -275,6 +266,7 @@ class AuthScreen(tk.Frame):
             sock.close()
             self.status.config(text=resp.get("message","Login failed") if resp else "No response")
 
+    # Registers a new account entry, automatically issuing a subsequent login step if valid.
     def _register(self):
         sock = self._connect()
         if not sock:
@@ -295,6 +287,9 @@ class AuthScreen(tk.Frame):
         self.status.config(text=resp.get("message","Register failed") if resp else "No response")
 
 
+
+# GAME LOBBY NAVIGATION SCREEN
+
 class RoomScreen(tk.Frame):
     def __init__(self, master, sock: socket.socket, username: str, on_join, on_logout):
         super().__init__(master, bg=BG_DARK)
@@ -305,6 +300,7 @@ class RoomScreen(tk.Frame):
         self._build()
         self.after(100, self._refresh_rooms)
 
+    # Constructs room browsers, interactive listings, text entries, and layout buttons.
     def _build(self):
         self.pack(fill="both", expand=True)
         card = tk.Frame(self, bg=BG_CARD, padx=40, pady=36)
@@ -348,6 +344,7 @@ class RoomScreen(tk.Frame):
         self.status = label(card, "", fg=DANGER)
         self.status.pack(pady=(0,8))
 
+    # Pulls active room instances from the server and refreshes the listbox array view.
     def _refresh_rooms(self):
         send_msg(self.sock, {"action": "get_rooms"})
         resp = recv_msg(self.sock)
@@ -360,12 +357,14 @@ class RoomScreen(tk.Frame):
                 for r in rooms:
                     self.room_listbox.insert(tk.END, r)
 
+    # Dispatches a room initialization request under the configured text name variable.
     def _create_room(self):
         name = self.new_room_var.get().strip()
         if name:
             send_msg(self.sock, {"action": "create_room", "room_name": name})
             self._wait_for_join()
 
+    # Requests entry token rights to the room currently highlighted inside the listbox widget.
     def _join_room(self):
         sel = self.room_listbox.curselection()
         if not sel:
@@ -378,6 +377,7 @@ class RoomScreen(tk.Frame):
         send_msg(self.sock, {"action": "join_room", "room_name": room_name})
         self._wait_for_join()
 
+    # Monitors response payloads to verify if the client joins as a player or is placed in a waiting room queue.
     def _wait_for_join(self):
         resp = recv_msg(self.sock)
         if resp:
@@ -388,9 +388,13 @@ class RoomScreen(tk.Frame):
             elif action == "system_message":
                 self.status.config(text=resp.get("text", "Error connecting to room."))
                 
+    # Directs application hooks to process log-out routes.
     def _logout(self):
         self.on_logout()
 
+
+
+# INTERACTIVE DRAWING CANVAS PANEL
 
 class DrawCanvas(tk.Frame):
     W, H = 680, 480
@@ -406,6 +410,7 @@ class DrawCanvas(tk.Frame):
         self._last    = None
         self._build()
 
+    # Configures the palette layout, brush sliders, clear panels, and canvas mouse listener bindings.
     def _build(self):
         self.toolbar = tk.Frame(self, bg=BG_MID, pady=6)
         self.toolbar.pack(fill="x")
@@ -445,39 +450,47 @@ class DrawCanvas(tk.Frame):
 
         self._enabled = True
 
+    # Sets whether user interaction with the drawing canvas is active or blocked.
     def set_enabled(self, enabled: bool):
         self._enabled = enabled
         self.canvas.config(cursor="crosshair" if enabled else "arrow")
 
+    # Packs or un-packs the drawing controls layout depending on the user's current role.
     def set_toolbar_visible(self, visible: bool):
         if visible:
             self.toolbar.pack(fill="x", before=self.canvas)
         else:
             self.toolbar.pack_forget()
 
+    # Updates the active brush color tracking variable and disables erasing mode.
     def _set_color(self, c):
         self.color = c
         self.erasing = False
 
+    # Displays an OS native colorpicker chooser modal and assigns selection values.
     def _pick_color(self):
         c = colorchooser.askcolor(color=self.color)[1]
         if c:
             self.color = c
             self.erasing = False
 
+    # Toggles drawing operations between standard brush color tracking and eraser modes.
     def _toggle_erase(self):
         self.erasing = not self.erasing
 
+    # Clears lines from the local canvas asset view and sends a clear signal to the server.
     def _clear_all(self):
         self.canvas.delete("all")
         self.on_clear()
 
+    # Establishes cursor anchor points on mouse-click events to start tracking coordinates.
     def _on_press(self, e):
         if not self._enabled:
             return
         self._last = (e.x, e.y)
         self.drawing = True
 
+    # Draws vector lines locally on mouse motion and forwards coordinate streams to the server.
     def _on_drag(self, e):
         if not self._enabled or not self.drawing or self._last is None:
             return
@@ -492,10 +505,12 @@ class DrawCanvas(tk.Frame):
                       "color":col,"size":sz})
         self._last = (x1, y1)
 
+    # Closes line string tracking operations when the mouse button is released.
     def _on_release(self, _):
         self.drawing = False
         self._last = None
 
+    # Renders canvas vectors received from remote drawing players over the network stream.
     def remote_draw(self, data: dict):
         self.canvas.create_line(
             data["x0"], data["y0"], data["x1"], data["y1"],
@@ -503,9 +518,13 @@ class DrawCanvas(tk.Frame):
             capstyle="round", smooth=True
         )
 
+    # Clears all visual items drawn on the local canvas.
     def clear(self):
         self.canvas.delete("all")
 
+
+
+# GAME CHAT & GUESSING PANEL
 
 class ChatPanel(tk.Frame):
     def __init__(self, parent, on_send):
@@ -513,6 +532,7 @@ class ChatPanel(tk.Frame):
         self.on_send = on_send
         self._build()
 
+    # Assembles log displays and text fields, defining text formatting tag colors.
     def _build(self):
         label(self, "💬 Chat & Guess", font=FONT_HEAD, fg=ACCENT).pack(pady=(8,4), padx=8, anchor="w")
 
@@ -538,6 +558,7 @@ class ChatPanel(tk.Frame):
         self.log.tag_config("other",   foreground=TEXT_MAIN)
         self.log.tag_config("name",    foreground=ACCENT, font=("Consolas",11,"bold"))
 
+    # Disables input controls for the drawer to prevent cheating, or enables them for guessers.
     def set_drawer_mode(self, is_drawer: bool):
         if is_drawer:
             self.entry.config(state="disabled", bg=BG_DARK)
@@ -548,18 +569,21 @@ class ChatPanel(tk.Frame):
             self._send_btn.config(state="normal", bg=ACCENT)
             self._placeholder.config(text="")
 
+    # Extracts chat field text entries and dispatches them through callback event lines.
     def _send(self):
         text = self.entry.get().strip()
         if text:
             self.on_send(text)
             self.entry.delete(0, "end")
 
+    # Appends formatted standalone announcements, system logs, or alerts into the log feed.
     def append(self, text: str, tag="other"):
         self.log.config(state="normal")
         self.log.insert("end", text + "\n", tag)
         self.log.see("end")
         self.log.config(state="disabled")
 
+    # Formats and appends player chat messages with username prefixes into the log log.
     def append_chat(self, username: str, text: str, own: bool = False):
         self.log.config(state="normal")
         self.log.insert("end", f"{username}: ", "name")
@@ -568,17 +592,22 @@ class ChatPanel(tk.Frame):
         self.log.config(state="disabled")
 
 
+
+# PLAYER LIST & SCOREBOARD PANEL
+
 class PlayerPanel(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=BG_CARD, width=180)
         self._build()
         self._entries: dict[str, tk.Label] = {}
 
+    # Generates structural housing frames for adding participant listings.
     def _build(self):
         label(self, "👥 Players", font=FONT_HEAD, fg=ACCENT).pack(pady=(8,4), padx=8, anchor="w")
         self.inner = tk.Frame(self, bg=BG_CARD)
         self.inner.pack(fill="both", expand=True, padx=8)
 
+    # Rebuilds the active player scorecard, sorting by point ranks and highlighting the drawer.
     def update_players(self, rankings: list[dict], drawer: str | None = None):
         for w in self.inner.winfo_children():
             w.destroy()
@@ -594,6 +623,7 @@ class PlayerPanel(tk.Frame):
             label(row, name,  fg=color, font=("Segoe UI",10,"bold")).pack(side="left", padx=2)
             label(row, str(score), fg=SUCCESS, font=("Segoe UI",10)).pack(side="right", padx=6)
 
+    # Renders an unranked bulleted list of usernames, used in pre-game lobbies.
     def simple_list(self, players: list[str]):
         for w in self.inner.winfo_children():
             w.destroy()
@@ -602,6 +632,8 @@ class PlayerPanel(tk.Frame):
                      font=FONT_BODY, anchor="w").pack(fill="x", pady=1)
 
 
+# SYSTEM HEADS-UP DISPLAY STATUS BAR
+
 class InfoBar(tk.Frame):
     def __init__(self, parent):
         super().__init__(parent, bg=BG_MID, height=50)
@@ -609,6 +641,7 @@ class InfoBar(tk.Frame):
         self._remaining = 0
         self._build()
 
+    # Mounts round trackers, category markers, word views, and timer widgets across the bar.
     def _build(self):
         self.round_lbl = label(self, "Round — / —", fg=TEXT_DIM, font=FONT_BODY)
         self.round_lbl.pack(side="left", padx=16)
@@ -625,22 +658,28 @@ class InfoBar(tk.Frame):
         self.drawer_lbl = label(self, "", fg=TEXT_DIM, font=("Segoe UI",10))
         self.drawer_lbl.pack(side="right", padx=8)
 
+    # Updates the round layout label text.
     def set_round(self, n: int, total: int):
         self.round_lbl.config(text=f"Round {n}/{total}")
 
+    # Updates the active round category label text marker.
     def set_category(self, cat: str):
         self.cat_lbl.config(text=f"[{cat}]" if cat else "")
 
+    # Updates the word or hidden character placeholder hint string text layout.
     def set_word(self, text: str):
         self.word_lbl.config(text=text)
 
+    # Updates the string header indicating which player is currently drawing.
     def set_drawer(self, name: str):
         self.drawer_lbl.config(text=f"✏️ {name} is drawing")
 
+    # Sets the starting value and launches the turn countdown ticker clock sequence.
     def start_timer(self, seconds: int):
         self._remaining = seconds
         self._tick()
 
+    # Counts down remaining turn seconds recursively via safe Tkinter clock task insertions.
     def _tick(self):
         if self._timer_job:
             self.after_cancel(self._timer_job)
@@ -652,11 +691,15 @@ class InfoBar(tk.Frame):
         self._remaining -= 1
         self._timer_job = self.after(1000, self._tick)
 
+    # Cancels the pending clock countdown loop and resets timer display text strings.
     def stop_timer(self):
         if self._timer_job:
             self.after_cancel(self._timer_job)
         self.timer_lbl.config(text="⏱ —", fg=TEXT_DIM)
 
+
+
+# VOTE OVERLAY MODAL PANEL
 
 class VoteDialog(tk.Toplevel):
     def __init__(self, parent, choices: list[str], on_choice, seconds=10):
@@ -669,6 +712,7 @@ class VoteDialog(tk.Toplevel):
         self._build(choices, on_choice, seconds)
         self.protocol("WM_DELETE_WINDOW", lambda: None) 
 
+    # Populates the layout window with custom category selection buttons and a closing timer.
     def _build(self, choices, on_choice, seconds):
         label(self, "🗳️ Vote for a category!", font=FONT_HEAD, fg=ACCENT).pack(pady=16, padx=30)
         self.timer = label(self, f"Voting ends in {seconds}s", fg=TEXT_DIM)
@@ -703,6 +747,9 @@ class VoteDialog(tk.Toplevel):
         self.geometry(f"+{(sw-300)//2}+{(sh-250)//2}")
 
 
+# OVERLAY PLACEMENT DISPLAY
+
+# Spawns a secondary popup overlay to display round score standings or top-10 historic all-time records.
 def show_results(parent, title: str, rankings: list[dict], all_time: list[dict] | None = None):
     win = tk.Toplevel(parent)
     win.title(title)
@@ -730,6 +777,8 @@ def show_results(parent, title: str, rankings: list[dict], all_time: list[dict] 
     win.geometry(f"+{(sw-400)//2}+{(sh-500)//2}")
 
 
+# GAME VIEW FRAMEWORK
+
 class GameScreen(tk.Frame):
     def __init__(self, master, sock: socket.socket, username: str, room_name: str, on_leave, is_waiting=False):
         super().__init__(master, bg=BG_DARK)
@@ -748,6 +797,7 @@ class GameScreen(tk.Frame):
         
         send_msg(sock, {"action":"get_players"})
 
+    # Embeds control HUDs, user boards, canvases, and chat lines into a combined workspace grid layout.
     def _build(self):
         self.info_bar = InfoBar(self)
         self.info_bar.pack(fill="x", side="top")
@@ -791,22 +841,28 @@ class GameScreen(tk.Frame):
         self.leave_btn = styled_btn(self.bottom, "🚪 Leave Room", self._leave_room, bg=DANGER, font=("Segoe UI", 9))
         self.leave_btn.pack(side="right", padx=16)
 
+    # Forwards locally drawn canvas line segment dictionaries out across the socket stream.
     def _on_local_draw(self, data: dict):
         send_msg(self.sock, {"action":"draw","data":data})
 
+    # Transmits a command to clear the canvas for all connected players.
     def _on_local_clear(self):
         send_msg(self.sock, {"action":"clear_canvas"})
 
+    # Transmits typed text messages or word guess entries out over the socket stream.
     def _on_chat_send(self, text: str):
         send_msg(self.sock, {"action":"chat","text":text})
 
+    # Requests that the room host trigger the start of the game session match.
     def _start_game(self):
         send_msg(self.sock, {"action":"start_game"})
         
+    # Flags the running session loop to stop and transmits a room exit alert to the server.
     def _leave_room(self):
         self._running = False
         send_msg(self.sock, {"action": "leave_room"})
 
+    # Loops continuously on a background worker thread to parse streaming TCP message packets.
     def _recv_loop(self):
         while self._running:
             msg = recv_msg(self.sock)
@@ -816,6 +872,7 @@ class GameScreen(tk.Frame):
                 break
             self.after(0, self._handle, msg)
 
+    # Parses event codes from the server to safely update frames, clock timers, and boards on the main UI thread.
     def _handle(self, msg: dict):
         if not self.winfo_exists():
             return  
@@ -960,6 +1017,8 @@ class GameScreen(tk.Frame):
             show_results(self, "🌍 All-Time Leaderboard", data)
 
 
+# CORE APLICATION
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -972,22 +1031,26 @@ class App(tk.Tk):
         self.username = None
         self._show_auth()
 
+    # Deletes the active frame layout layer and mounts a fresh Authentication view screen.
     def _show_auth(self):
         if self._current:
             self._current.destroy()
         self._current = AuthScreen(self, self._on_auth)
 
+    # Configures global session parameters following validation and brings up the Lobby view.
     def _on_auth(self, sock: socket.socket, username: str, message: str):
         self.sock = sock
         self.username = username
         self._show_lobby()
 
+    # Tears down the registration view card layout and mounts the central room browser Lobby dashboard.
     def _show_lobby(self):
         if self._current:
             self._current.destroy()
         self._current = RoomScreen(self, self.sock, self.username, self._on_room_join, self._on_logout)
         self.title(f"🎨 Drawtic.io  —  {self.username} (Lobby)")
 
+    # Destroys the lobby view elements and routes users directly to the active multiplayer gameplay layout screen.
     def _on_room_join(self, room_name: str, is_waiting: bool = False):
         if self._current:
             self._current.destroy()
@@ -995,6 +1058,7 @@ class App(tk.Tk):
         mode = "Waiting Room" if is_waiting else "Room"
         self.title(f"🎨 Drawtic.io  —  {self.username}  |  {mode}: {room_name}")
 
+    # Notifies server nodes of user termination intents and safely clears socket channels.
     def _on_logout(self):
         if self.sock:
             send_msg(self.sock, {"action": "logout"})
@@ -1005,6 +1069,7 @@ class App(tk.Tk):
             self.sock = None
         self.username = None
         self._show_auth()
+
 
 if __name__ == "__main__":
     app = App()
