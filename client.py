@@ -5,6 +5,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox, colorchooser
 import time
 import struct
+import select
+
+DISCOVERY_PORT = 9998
 
 def send_msg(sock: socket.socket, data: dict) -> bool:
     try:
@@ -38,6 +41,58 @@ def _recv_exact(sock: socket.socket, n: int) -> bytes | None:
             return None
         buf += chunk
     return buf
+
+def get_all_local_ips() -> list[str]:
+    """
+    Mengumpulkan SEMUA alamat IPv4 lokal milik device ini, dari SEMUA network
+    adapter yang aktif (WiFi, Ethernet, VirtualBox Host-Only, VMware vEthernet,
+    Docker/WSL, Hamachi, VPN, Tailscale, dll) -- bukan hanya satu IP yang
+    "ditebak" lewat rute default seperti sebelumnya.
+
+    ROOT CAUSE auto-detect gagal: dulu broadcast UDP dikirim lewat socket yang
+    tidak diikat (bind) ke interface tertentu, sehingga OS bebas memilih lewat
+    adapter MANA paket itu keluar. Kalau ada adapter virtual/VPN yang kebetulan
+    jadi rute default, broadcast bisa keluar lewat adapter virtual itu dan TIDAK
+    PERNAH sampai ke WiFi/hotspot yang sebenarnya dipakai -- walau dua device
+    sebenarnya satu subnet. Dengan mengetahui semua IP lokal di sini, kita bisa
+    kirim broadcast secara eksplisit lewat SETIAP adapter (lihat _auto_detect).
+    """
+    ips: set[str] = set()
+
+    try:
+        hostname = socket.gethostname()
+        _, _, addr_list = socket.gethostbyname_ex(hostname)
+        for ip in addr_list:
+            if ip and not ip.startswith("127."):
+                ips.add(ip)
+    except Exception:
+        pass
+
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127."):
+                ips.add(ip)
+    except Exception:
+        pass
+
+    # Probe beberapa tujuan umum: trik ini TIDAK mengirim data apa pun (UDP
+    # connect() cuma menentukan rute), tapi membantu memunculkan IP adapter
+    # lain yang kadang tidak ikut terdaftar lewat hostname di atas.
+    probe_targets = ["8.8.8.8", "1.1.1.1", "192.168.1.1", "192.168.0.1", "192.168.56.1"]
+    for target in probe_targets:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.2)
+            s.connect((target, 80))
+            ip = s.getsockname()[0]
+            s.close()
+            if ip and not ip.startswith("127."):
+                ips.add(ip)
+        except Exception:
+            pass
+
+    return list(ips)
 
 BG_DARK    = "#1e1e2e"
 BG_MID     = "#2a2a3e"
@@ -111,28 +166,88 @@ class AuthScreen(tk.Frame):
     def _auto_detect(self):
         self.status.config(text="Searching local network...", fg=TEXT_DIM)
         self.update() 
-        
-        udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-        udp_sock.settimeout(2.0) 
-        
+
+        sockets: list[socket.socket] = []
+        found_ip = None
         try:
-            # KODE INI GA GW SENTUH SAMA SEKALI
-            udp_sock.sendto(b"DISCOVER_SKRIBBL_SERVER", ('<broadcast>', 9998))
-            data, addr = udp_sock.recvfrom(1024)
-            if data.startswith(b"SKRIBBL_SERVER_HERE"):
-                decoded = data.decode('utf-8')
-                parts = decoded.split(":")
-                server_ip = parts[1] if len(parts) > 1 else addr[0]
-                
-                self.host_var.set(server_ip) 
-                self.status.config(text=f"Server found at {server_ip}!", fg=SUCCESS)
-        except socket.timeout:
-            self.status.config(text="No server found on LAN.", fg=DANGER)
+            # KODE INI GA GW SENTUH SAMA SEKALI -> diganti jadi multi-interface
+            # karena 1 socket "default" saja terbukti tidak cukup di Windows
+            # ketika ada banyak adapter (VirtualBox/VMware/Hamachi/VPN/Tailscale).
+            local_ips = get_all_local_ips()
+
+            for ip in local_ips:
+                try:
+                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                    # Bind ke IP adapter spesifik ini supaya paket broadcast
+                    # benar-benar keluar lewat adapter tersebut, bukan lewat
+                    # adapter "default" pilihan OS yang bisa saja salah.
+                    s.bind((ip, 0))
+                    s.setblocking(False)
+                    sockets.append(s)
+                except Exception:
+                    continue
+
+            # Fallback: kalau semua bind ke IP spesifik gagal (jarang terjadi),
+            # tetap coba cara lama supaya fitur tidak mati total.
+            if not sockets:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                s.bind(('', 0))
+                s.setblocking(False)
+                sockets.append(s)
+
+            # Target: broadcast umum + broadcast langsung tiap subnet
+            # (mis. 192.168.1.255) dari setiap adapter yang ditemukan, supaya
+            # tetap jalan walau salah satu jenis broadcast difilter router.
+            targets = {"255.255.255.255"}
+            for ip in local_ips:
+                octets = ip.split(".")
+                if len(octets) == 4:
+                    targets.add(f"{octets[0]}.{octets[1]}.{octets[2]}.255")
+
+            for s in sockets:
+                for t in targets:
+                    try:
+                        s.sendto(b"DISCOVER_SKRIBBL_SERVER", (t, DISCOVERY_PORT))
+                    except Exception:
+                        pass
+
+            deadline = time.time() + 2.0
+            while sockets and time.time() < deadline:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    break
+                ready, _, _ = select.select(sockets, [], [], remaining)
+                if not ready:
+                    break
+                for s in ready:
+                    try:
+                        data, addr = s.recvfrom(1024)
+                    except Exception:
+                        continue
+                    if data.startswith(b"SKRIBBL_SERVER_HERE"):
+                        decoded = data.decode('utf-8', errors='ignore')
+                        parts = decoded.split(":")
+                        found_ip = parts[1] if len(parts) > 1 else addr[0]
+                        break
+                if found_ip:
+                    break
+
+            if found_ip:
+                self.host_var.set(found_ip) 
+                self.status.config(text=f"Server found at {found_ip}!", fg=SUCCESS)
+            else:
+                self.status.config(text="No server found on LAN.", fg=DANGER)
         except Exception as e:
             self.status.config(text=f"Network error: {e}", fg=DANGER)
         finally:
-            udp_sock.close()
+            for s in sockets:
+                try:
+                    s.close()
+                except Exception:
+                    pass
 
     def _connect(self) -> socket.socket | None:
         host = self.host_var.get().strip() or "127.0.0.1"
@@ -653,7 +768,7 @@ class GameScreen(tk.Frame):
         self.waiting_frame = tk.Frame(mid, bg=BG_CARD)
         label(self.waiting_frame, "⏳ WAITING ROOM", font=("Segoe UI", 24, "bold"), fg=ACCENT).pack(pady=(120, 10))
         label(self.waiting_frame, "A round is currently in progress.", fg=TEXT_DIM).pack()
-        label(self.waiting_frame, "You will join automatically once Ronde Selanjutnya (the NEXT ROUND) begins.", fg=TEXT_DIM).pack(pady=(2,0))
+        label(self.waiting_frame, "You will join automatically once the Next Round starts..", fg=TEXT_DIM).pack(pady=(2,0))
 
         if self.is_waiting:
             self.waiting_frame.pack(side="left", fill="both", expand=True, padx=8, pady=8)
