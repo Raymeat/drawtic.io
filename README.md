@@ -6,7 +6,7 @@ A lightweight, multiplayer desktop drawing-and-guessing game built entirely with
 Fawwaz Reynardio Ednansyah 5025241167<br>
 Naufal Bintang Brillian 5025241168<br>
 Rayen Yeriel Mangiwa 5025241262<br>
-Makna Alam Pratama 5025140177<br>
+Makna Alam Pratama 5025241077<br>
 
 ## Features
 
